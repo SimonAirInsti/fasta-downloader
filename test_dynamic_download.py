@@ -1,82 +1,82 @@
 #!/usr/bin/env python3
 """
-Ejemplo de uso del código dinámico para descarga automática desde UniProt.
+Usage example of dynamic code for automatic download from UniProt.
 """
 
-# Importar la clase actualizada
+# Import the updated class
 from in_db_maker import protDB
 
-def ejemplo_basico():
-    """Ejemplo básico con parámetros por defecto."""
+def basic_example():
+    """Basic example with default parameters."""
     print("=" * 60)
-    print("🧪 EJEMPLO 1: Configuración por defecto")
+    print("🧪 EXAMPLE 1: Default configuration")
     print("=" * 60)
     
-    # Usar configuración por defecto (Influenza A virus)
+    # Use default configuration (Influenza A virus)
     db = protDB()
     
-    # Guardar resultados
-    db.save_results("output_ejemplo1")
+    # Save results
+    db.save_results("output_example1")
     
-    print(f"✅ Proteínas procesadas: {len(db.target_proteins)}")
+    print(f"✅ Proteins processed: {len(db.target_proteins)}")
 
-def ejemplo_personalizado():
-    """Ejemplo con virus y proteínas personalizadas."""
+def custom_example():
+    """Example with custom virus and proteins."""
     print("=" * 60)
-    print("🧪 EJEMPLO 2: Configuración personalizada")
+    print("🧪 EXAMPLE 2: Custom configuration")
     print("=" * 60)
     
-    # Parámetros personalizados
-    virus_personalizado = "Influenza A virus"
-    proteinas_personalizadas = [
+    # Custom parameters
+    custom_virus = "Influenza A virus"
+    custom_proteins = [
         "Hemagglutinin",
         "Neuraminidase"
     ]
     
-    # Crear base de datos con parámetros específicos
+    # Create database with specific parameters
     db = protDB(
-        virus_name=virus_personalizado,
-        target_proteins=proteinas_personalizadas
+        virus_name=custom_virus,
+        target_proteins=custom_proteins
     )
     
-    # Guardar resultados
-    db.save_results("output_ejemplo2")
+    # Save results
+    db.save_results("output_example2")
     
-    print(f"✅ Virus: {virus_personalizado}")
-    print(f"✅ Proteínas: {', '.join(proteinas_personalizadas)}")
+    print(f"✅ Virus: {custom_virus}")
+    print(f"✅ Proteins: {', '.join(custom_proteins)}")
 
-def ejemplo_otros_virus():
-    """Ejemplo con otros virus."""
+def other_virus_example():
+    """Example with other viruses."""
     print("=" * 60)
-    print("🧪 EJEMPLO 3: Otro virus")
+    print("🧪 EXAMPLE 3: Other virus")
     print("=" * 60)
     
-    # Intentar con otro virus (puede que no tenga tantos datos)
+    # Try with another virus (may not have as much data)
     db = protDB(
         virus_name="Influenza B virus",
         target_proteins=["Hemagglutinin", "Neuraminidase"]
     )
     
-    # Guardar resultados
+    # Save results
     db.save_results("output_influenza_b")
 
 if __name__ == "__main__":
     try:
-        print("🚀 Iniciando ejemplos de descarga dinámica...")
+        print("🚀 Starting dynamic download examples...")
         
-        # Ejecutar ejemplos
-        ejemplo_basico()
+        # Run examples
+        basic_example()
         print("\n")
-        ejemplo_personalizado()
+        custom_example()
         print("\n")
-        ejemplo_otros_virus()
+        other_virus_example()
         
-        print("\n🎉 ¡Todos los ejemplos completados!")
-        print("\n📁 Archivos generados:")
-        print("  - output_ejemplo1/")
-        print("  - output_ejemplo2/") 
+        print("\n🎉 All examples completed!")
+        print("\n📁 Generated files:")
+        print("  - output_example1/")
+        print("  - output_example2/") 
         print("  - output_influenza_b/")
         
     except Exception as e:
         print(f"❌ Error: {e}")
-        print("💡 Asegúrate de tener conexión a internet y las dependencias instaladas")
+        print("💡 Make sure you have internet connection and dependencies installed")
