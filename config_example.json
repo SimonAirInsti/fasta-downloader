@@ -20,16 +20,5 @@
     "rettype": "fasta",
     "retmode": "text",
     "api_base": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
-  },
-  "uniprot": {
-    "max_workers": 35,
-    "proteome_csv": "proteomes_Influenza_A_2025_02_05.tsv",
-    "fasta_dict": {
-      "Neuraminidase": "uniprotkb_Neuraminidase_2025_02_05.fasta",
-      "Hemagglutinin": "uniprotkb_Hemagglutinin_2025_02_05.fasta",
-      "Matrix protein 2": "uniprotkb_Matrix_protein_2_AND_taxonomy_2025_06_18.fasta",
-      "Matrix protein 1": "uniprotkb_Matrix_protein_1_AND_taxonomy_2025_06_18.fasta",
-      "Nucleoprotein": "uniprotkb_Nucleoprotein_AND_taxonomy_id_2025_06_18.fasta"
-    }
   }
 }

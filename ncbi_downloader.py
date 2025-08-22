@@ -23,6 +23,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import hashlib
 import gzip
+import io
+import re
+import requests
+import urllib.parse
+import pandas as pd
+import numpy as np
+from dataclasses import dataclass
+from joblib import Parallel, delayed
+from tqdm import tqdm
 from dataclasses import dataclass
 import requests
 import io
@@ -688,6 +697,159 @@ class NCBIDownloaderV2:
         self.downloaded_hashes.add(content_hash)
         return False
         
+    def fetch_accession_numbers(self, query: str, max_results: int = None) -> List[str]:
+        """
+        Fetch accession numbers from NCBI based on a search query.
+        
+        Args:
+            query (str): NCBI search query
+            max_results (int): Maximum number of results to fetch (None for all)
+            
+        Returns:
+            List[str]: List of accession numbers
+        """
+        try:
+            self.logger.info(f"Searching NCBI with query: {query}")
+            
+            # Initial search to get total count
+            handle = Entrez.esearch(db="protein", term=query)
+            record = Entrez.read(handle)
+            handle.close()
+            
+            total_count = int(record["Count"])
+            self.logger.info(f"Found {total_count:,} potential sequences")
+            
+            if total_count == 0:
+                self.logger.warning("No sequences found for this query")
+                return []
+            
+            # Limit results if specified
+            if max_results and max_results < total_count:
+                fetch_count = max_results
+                self.logger.info(f"Limiting to {max_results:,} sequences")
+            else:
+                fetch_count = total_count
+            
+            ids = []
+            batch_size = 10000  # NCBI's maximum for esearch
+            
+            # Fetch IDs in batches
+            with tqdm(total=fetch_count, desc="Fetching IDs", unit="ids") as pbar:
+                while len(ids) < fetch_count:
+                    try:
+                        # Calculate how many to fetch in this batch
+                        remaining = fetch_count - len(ids)
+                        current_batch_size = min(batch_size, remaining)
+                        
+                        # Fetch batch
+                        handle = Entrez.esearch(
+                            db="protein", 
+                            term=query, 
+                            retmax=current_batch_size, 
+                            retstart=len(ids)
+                        )
+                        record = Entrez.read(handle)
+                        handle.close()
+                        
+                        batch_ids = record["IdList"]
+                        if not batch_ids:
+                            self.logger.warning("No more IDs returned, stopping")
+                            break
+                            
+                        ids.extend(batch_ids)
+                        pbar.update(len(batch_ids))
+                        
+                        # Rate limiting
+                        time.sleep(0.1)
+                        
+                    except Exception as e:
+                        self.logger.error(f"Error fetching batch: {e}")
+                        time.sleep(5)  # Wait longer on error
+                        continue
+            
+            # Remove duplicates while preserving order
+            unique_ids = list(dict.fromkeys(ids))
+            self.logger.info(f"Fetched {len(unique_ids):,} unique IDs")
+            
+            return unique_ids
+            
+        except Exception as e:
+            self.logger.error(f"Error in fetch_accession_numbers: {e}")
+            return []
+    
+    def generate_ncbi_ids_file(self, virus_name: str, target_proteins: List[str], 
+                              output_filename: str = "ncbi_ids_dict.tsv",
+                              max_results_per_protein: int = None) -> bool:
+        """
+        Generate NCBI IDs dictionary file based on virus and target proteins.
+        
+        Args:
+            virus_name (str): Name of the virus (e.g., "Influenza A virus")
+            target_proteins (List[str]): List of target protein names
+            output_filename (str): Output filename for the TSV file
+            max_results_per_protein (int): Maximum results per protein (None for all)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            self.logger.info(f"Generating NCBI IDs file for {virus_name}")
+            self.logger.info(f"Target proteins: {', '.join(target_proteins)}")
+            
+            ncbi_ids_dict = {}
+            
+            # Process each protein
+            for protein in target_proteins:
+                self.logger.info(f"Processing {protein}...")
+                
+                # Build search query similar to your original code
+                query = f'("{virus_name}"[Organism] OR ("{virus_name}"[Organism] OR ("{virus_name}"[Organism] OR {virus_name}[All Fields]))) AND "{virus_name}"[porgn] AND "{protein}"[All Fields]'
+                
+                # Fetch accession numbers
+                ids = self.fetch_accession_numbers(query, max_results_per_protein)
+                
+                if ids:
+                    ncbi_ids_dict[protein] = ids
+                    self.logger.info(f"✅ {protein}: {len(ids):,} IDs collected")
+                else:
+                    self.logger.warning(f"⚠️ {protein}: No IDs found")
+                    ncbi_ids_dict[protein] = []
+                
+                # Small delay between proteins to be respectful to NCBI
+                time.sleep(1)
+            
+            # Write to file
+            output_path = self.output_dir / output_filename
+            with open(output_path, 'w', encoding='utf-8') as f:
+                # Write header
+                f.write("# NCBI IDs Dictionary\n")
+                f.write(f"# Generated: {datetime.now().isoformat()}\n")
+                f.write(f"# Virus: {virus_name}\n")
+                f.write(f"# Proteins: {', '.join(target_proteins)}\n")
+                f.write("# Format: protein_name<TAB>comma_separated_ids\n")
+                f.write("#\n")
+                
+                # Write data
+                total_ids = 0
+                for protein, ids in ncbi_ids_dict.items():
+                    if ids:
+                        f.write(f"{protein}\t{','.join(ids)}\n")
+                        total_ids += len(ids)
+                    else:
+                        f.write(f"{protein}\t\n")  # Empty line for proteins with no IDs
+                
+            self.logger.info(f"✅ NCBI IDs file generated: {output_path}")
+            self.logger.info(f"📊 Summary:")
+            for protein, ids in ncbi_ids_dict.items():
+                self.logger.info(f"  - {protein}: {len(ids):,} IDs")
+            self.logger.info(f"📋 Total IDs: {total_ids:,}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error generating NCBI IDs file: {e}")
+            return False
+    
     def load_ids_dict(self, filename: str) -> Dict[str, List[str]]:
         """Load the NCBI IDs dictionary from TSV file with enhanced validation."""
         self.logger.info(f"Loading IDs from {filename}")
@@ -1285,10 +1447,29 @@ def create_arg_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python ncbi_downloader_v2.py                           # Use default config
-  python ncbi_downloader_v2.py --input sample.tsv        # Use specific input file
-  python ncbi_downloader_v2.py --config custom.json      # Use custom config
-  python ncbi_downloader_v2.py --batch-size 100 --workers 2  # Override settings
+  # Basic usage with existing NCBI IDs file
+  python ncbi_downloader.py                              # Use default config and ncbi_ids_dict.tsv
+  python ncbi_downloader.py --input my_ids.tsv           # Use specific input file
+  
+  # Generate new NCBI IDs file
+  python ncbi_downloader.py --generate-ids               # Generate IDs for default proteins
+  python ncbi_downloader.py --generate-ids --virus-name "Influenza B virus" # Different virus
+  python ncbi_downloader.py --generate-ids --target-proteins Neuraminidase Hemagglutinin # Specific proteins
+  python ncbi_downloader.py --generate-ids --max-ids-per-protein 1000 # Limit IDs per protein
+  
+  # Combined workflows
+  python ncbi_downloader.py --generate-ids --ncbi-only   # Generate IDs and download NCBI only
+  python ncbi_downloader.py --generate-ids --virus-name "SARS-CoV-2" --target-proteins "spike protein" "nucleocapsid protein"
+  
+  # Data integration (automatic CSV/FASTA unification)
+  python ncbi_downloader.py --integrate                  # Download and integrate automatically
+  python ncbi_downloader.py --generate-ids --integrate   # Generate IDs, download, and integrate
+  python ncbi_downloader.py --uniprot-only --integrate   # UniProt download with integration
+  
+  # Configuration and optimization
+  python ncbi_downloader.py --config custom.json         # Use custom config
+  python ncbi_downloader.py --batch-size 100 --workers 2 # Override settings
+  python ncbi_downloader.py --uniprot-only --virus-name "Influenza A virus" # UniProt only
         """
     )
     
@@ -1380,6 +1561,31 @@ Examples:
         help='List of target proteins (space-separated)'
     )
     
+    parser.add_argument(
+        '--generate-ids',
+        action='store_true',
+        help='Generate NCBI IDs file instead of using existing one'
+    )
+    
+    parser.add_argument(
+        '--max-ids-per-protein',
+        type=int,
+        help='Maximum number of IDs to fetch per protein (default: all available)'
+    )
+    
+    parser.add_argument(
+        '--ids-output',
+        type=str,
+        default='ncbi_ids_dict.tsv',
+        help='Output filename for generated NCBI IDs file (default: ncbi_ids_dict.tsv)'
+    )
+    
+    parser.add_argument(
+        '--integrate',
+        action='store_true',
+        help='Automatically run data integration after successful download to create unified CSV and FASTA files'
+    )
+    
     return parser
 
 def main():
@@ -1433,13 +1639,51 @@ def main():
             downloader.logger.error("Cannot specify both --uniprot-only and --ncbi-only")
             sys.exit(1)
         
-        # Load and validate NCBI input if needed
+        # Prepare default target proteins if not specified
+        if not target_proteins:
+            target_proteins = [
+                "Neuraminidase", 
+                "Hemagglutinin", 
+                "Matrix protein 2", 
+                "Matrix protein 1", 
+                "Nucleoprotein"
+            ]
+        
+        # Handle NCBI IDs generation or loading
         ncbi_ids_dict = {}
         if download_ncbi:
-            if not Path(args.input).exists():
-                downloader.logger.error(f"Input file not found: {args.input}")
-                sys.exit(1)
-            ncbi_ids_dict = downloader.load_ids_dict(args.input)
+            if args.generate_ids:
+                # Generate new NCBI IDs file
+                downloader.logger.info("Generating NCBI IDs file...")
+                downloader.logger.info(f"Virus: {virus_name}")
+                downloader.logger.info(f"Proteins: {', '.join(target_proteins)}")
+                
+                success = downloader.generate_ncbi_ids_file(
+                    virus_name=virus_name,
+                    target_proteins=target_proteins,
+                    output_filename=args.ids_output,
+                    max_results_per_protein=args.max_ids_per_protein
+                )
+                
+                if not success:
+                    downloader.logger.error("Failed to generate NCBI IDs file")
+                    sys.exit(1)
+                
+                # Load the generated file
+                ids_file_path = downloader.output_dir / args.ids_output
+                if ids_file_path.exists():
+                    ncbi_ids_dict = downloader.load_ids_dict(str(ids_file_path))
+                else:
+                    downloader.logger.error(f"Generated file not found: {ids_file_path}")
+                    sys.exit(1)
+                    
+            else:
+                # Load existing NCBI IDs file
+                if not Path(args.input).exists():
+                    downloader.logger.error(f"Input file not found: {args.input}")
+                    downloader.logger.info("Tip: Use --generate-ids to create a new NCBI IDs file")
+                    sys.exit(1)
+                ncbi_ids_dict = downloader.load_ids_dict(args.input)
         
         if args.dry_run:
             downloader.logger.info("Dry run completed successfully")
@@ -1503,6 +1747,64 @@ def main():
             if target_proteins:
                 downloader.logger.info(f"Target proteins: {', '.join(target_proteins)}")
             downloader.download_uniprot_data(virus_name, target_proteins, proteome_csv, fasta_dict)
+        
+        # Run data integration if requested
+        if args.integrate:
+            downloader.logger.info("="*60)
+            downloader.logger.info("STARTING DATA INTEGRATION")
+            downloader.logger.info("="*60)
+            
+            try:
+                # Import and run data integration
+                from data_integrator import DataIntegrator
+                
+                # Initialize integrator with the same output directory
+                integrator = DataIntegrator(str(downloader.output_dir))
+                
+                downloader.logger.info("Processing CSV files...")
+                csv_files = integrator.identify_csv_files(exclude_patterns=["proteome", "unified"])
+                csv_df = integrator.read_and_concatenate_csv_files(csv_files)
+                
+                downloader.logger.info("Processing FASTA files...")
+                fasta_files = integrator.identify_fasta_files(exclude_patterns=["unified"])
+                fasta_df = integrator.parse_fasta_files(fasta_files)
+                
+                if not csv_df.empty or not fasta_df.empty:
+                    downloader.logger.info("Combining and processing data...")
+                    combined_df = integrator.combine_csv_and_fasta_data(csv_df, fasta_df)
+                    
+                    if not combined_df.empty:
+                        # Save unified outputs
+                        output_csv = downloader.output_dir / "unified_data.csv"
+                        combined_df.to_csv(output_csv, index=False)
+                        downloader.logger.info(f"[INTEGRATION] Unified CSV saved: {output_csv}")
+                        
+                        # Create unified FASTA
+                        fasta_success = integrator.create_unified_fasta(combined_df, "unified_sequences.fasta")
+                        if fasta_success:
+                            downloader.logger.info(f"[INTEGRATION] Unified FASTA saved: {downloader.output_dir / 'unified_sequences.fasta'}")
+                        
+                        # Log integration summary
+                        downloader.logger.info(f"[INTEGRATION] Integration completed successfully!")
+                        downloader.logger.info(f"[INTEGRATION] Final dataset: {len(combined_df):,} unique sequences")
+                        downloader.logger.info(f"[INTEGRATION] Output files:")
+                        downloader.logger.info(f"[INTEGRATION]   - {output_csv}")
+                        downloader.logger.info(f"[INTEGRATION]   - {downloader.output_dir / 'unified_sequences.fasta'}")
+                    else:
+                        downloader.logger.warning("[INTEGRATION] No data to integrate")
+                else:
+                    downloader.logger.warning("[INTEGRATION] No source files found for integration")
+                    
+            except ImportError:
+                downloader.logger.error("[INTEGRATION] data_integrator.py not found. Please ensure it's in the same directory.")
+            except Exception as e:
+                downloader.logger.error(f"[INTEGRATION] Integration failed: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            downloader.logger.info("="*60)
+            downloader.logger.info("DATA INTEGRATION COMPLETED")
+            downloader.logger.info("="*60)
         
     except KeyboardInterrupt:
         print("\nDownload interrupted by user")
